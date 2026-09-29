@@ -1,0 +1,245 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ecommerce
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ecommerce-config
+  namespace: ecommerce
+data:
+  ENVIRONMENT: production
+  JWT_ISSUER: ecommerce-backend
+  JWT_AUDIENCE: ecommerce
+  BACKEND_URL: http://backend-api:8000
+  CORS_ORIGINS: https://shop.example.com
+  OBJECT_STORAGE_REGION: region-1
+  OBJECT_STORAGE_BUCKET: ecommerce
+  AUTO_CREATE_SCHEMA: "false"
+  SEED_DEMO_DATA: "false"
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: ecommerce-schema-init
+  namespace: ecommerce
+spec:
+  backoffLimit: 4
+  template:
+    spec:
+      restartPolicy: OnFailure
+      initContainers:
+        - name: backend-schema
+          image: registry.example.com/ecommerce/backend-api:1.0.0
+          command: ["python", "-c", "from app.database import Base, engine; import app.models; Base.metadata.create_all(engine)"]
+          envFrom:
+            - configMapRef: {name: ecommerce-config}
+            - secretRef: {name: ecommerce-secrets}
+          securityContext: {allowPrivilegeEscalation: false, runAsNonRoot: true, capabilities: {drop: ["ALL"]}}
+        - name: order-schema
+          image: registry.example.com/ecommerce/order-service:1.0.0
+          command: ["python", "-c", "from app.database import Base, engine; import app.models; Base.metadata.create_all(engine)"]
+          envFrom:
+            - configMapRef: {name: ecommerce-config}
+            - secretRef: {name: ecommerce-secrets}
+          securityContext: {allowPrivilegeEscalation: false, runAsNonRoot: true, capabilities: {drop: ["ALL"]}}
+      containers:
+        - name: complete
+          image: busybox:1.37
+          command: ["sh", "-c", "echo schema-ready"]
+          securityContext: {allowPrivilegeEscalation: false, runAsNonRoot: true, runAsUser: 65534, capabilities: {drop: ["ALL"]}}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend-api
+  namespace: ecommerce
+spec:
+  replicas: 2
+  selector: {matchLabels: {app: backend-api}}
+  template:
+    metadata: {labels: {app: backend-api}}
+    spec:
+      securityContext: {runAsNonRoot: true, seccompProfile: {type: RuntimeDefault}}
+      containers:
+        - name: backend-api
+          image: registry.example.com/ecommerce/backend-api:1.0.0
+          ports: [{name: http, containerPort: 8000}]
+          envFrom:
+            - configMapRef: {name: ecommerce-config}
+            - secretRef: {name: ecommerce-secrets}
+          readinessProbe: {httpGet: {path: /health/ready, port: http}, initialDelaySeconds: 5, periodSeconds: 10}
+          livenessProbe: {httpGet: {path: /health/live, port: http}, initialDelaySeconds: 15, periodSeconds: 20}
+          resources:
+            requests: {cpu: 100m, memory: 128Mi}
+            limits: {cpu: 500m, memory: 512Mi}
+          securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: ["ALL"]}}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: backend-api, namespace: ecommerce}
+spec:
+  selector: {app: backend-api}
+  ports: [{name: http, port: 8000, targetPort: http}]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: order-service
+  namespace: ecommerce
+spec:
+  replicas: 2
+  selector: {matchLabels: {app: order-service}}
+  template:
+    metadata: {labels: {app: order-service}}
+    spec:
+      securityContext: {runAsNonRoot: true, seccompProfile: {type: RuntimeDefault}}
+      containers:
+        - name: order-service
+          image: registry.example.com/ecommerce/order-service:1.0.0
+          ports: [{name: http, containerPort: 8000}]
+          envFrom:
+            - configMapRef: {name: ecommerce-config}
+            - secretRef: {name: ecommerce-secrets}
+          readinessProbe: {httpGet: {path: /health/ready, port: http}, initialDelaySeconds: 5, periodSeconds: 10}
+          livenessProbe: {httpGet: {path: /health/live, port: http}, initialDelaySeconds: 15, periodSeconds: 20}
+          resources:
+            requests: {cpu: 100m, memory: 128Mi}
+            limits: {cpu: 500m, memory: 512Mi}
+          securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: ["ALL"]}}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: order-service, namespace: ecommerce}
+spec:
+  selector: {app: order-service}
+  ports: [{name: http, port: 8000, targetPort: http}]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: frontend
+  namespace: ecommerce
+spec:
+  replicas: 2
+  selector: {matchLabels: {app: frontend}}
+  template:
+    metadata: {labels: {app: frontend}}
+    spec:
+      securityContext: {runAsNonRoot: true, seccompProfile: {type: RuntimeDefault}}
+      containers:
+        - name: frontend
+          image: registry.example.com/ecommerce/frontend:1.0.0
+          ports: [{name: http, containerPort: 8080}]
+          readinessProbe: {httpGet: {path: /health, port: http}, initialDelaySeconds: 3, periodSeconds: 10}
+          livenessProbe: {httpGet: {path: /health, port: http}, initialDelaySeconds: 10, periodSeconds: 20}
+          resources:
+            requests: {cpu: 50m, memory: 32Mi}
+            limits: {cpu: 200m, memory: 128Mi}
+          securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: ["ALL"]}}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: frontend, namespace: ecommerce}
+spec:
+  selector: {app: frontend}
+  ports: [{name: http, port: 8080, targetPort: http}]
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: ecommerce
+  namespace: ecommerce
+  annotations:
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/proxy-body-size: 6m
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts: [shop.example.com]
+      secretName: ecommerce-tls
+  rules:
+    - host: shop.example.com
+      http:
+        paths:
+          - path: /api/v1/orders
+            pathType: Prefix
+            backend: {service: {name: order-service, port: {name: http}}}
+          - path: /api/v1
+            pathType: Prefix
+            backend: {service: {name: backend-api, port: {name: http}}}
+          - path: /
+            pathType: Prefix
+            backend: {service: {name: frontend, port: {name: http}}}
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata: {name: backend-api, namespace: ecommerce}
+spec:
+  scaleTargetRef: {apiVersion: apps/v1, kind: Deployment, name: backend-api}
+  minReplicas: 2
+  maxReplicas: 8
+  metrics:
+    - type: Resource
+      resource: {name: cpu, target: {type: Utilization, averageUtilization: 70}}
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata: {name: order-service, namespace: ecommerce}
+spec:
+  scaleTargetRef: {apiVersion: apps/v1, kind: Deployment, name: order-service}
+  minReplicas: 2
+  maxReplicas: 8
+  metrics:
+    - type: Resource
+      resource: {name: cpu, target: {type: Utilization, averageUtilization: 70}}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata: {name: backend-api, namespace: ecommerce}
+spec: {minAvailable: 1, selector: {matchLabels: {app: backend-api}}}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata: {name: order-service, namespace: ecommerce}
+spec: {minAvailable: 1, selector: {matchLabels: {app: order-service}}}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: frontend-ingress, namespace: ecommerce}
+spec:
+  podSelector: {matchLabels: {app: frontend}}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: ingress-nginx}}
+          podSelector: {matchLabels: {app.kubernetes.io/name: ingress-nginx}}
+      ports: [{protocol: TCP, port: 8080}]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: backend-api-ingress, namespace: ecommerce}
+spec:
+  podSelector: {matchLabels: {app: backend-api}}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: ingress-nginx}}
+          podSelector: {matchLabels: {app.kubernetes.io/name: ingress-nginx}}
+        - podSelector: {matchLabels: {app: frontend}}
+        - podSelector: {matchLabels: {app: order-service}}
+      ports: [{protocol: TCP, port: 8000}]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: order-service-ingress, namespace: ecommerce}
+spec:
+  podSelector: {matchLabels: {app: order-service}}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: ingress-nginx}}
+          podSelector: {matchLabels: {app.kubernetes.io/name: ingress-nginx}}
+        - podSelector: {matchLabels: {app: frontend}}
+      ports: [{protocol: TCP, port: 8000}]

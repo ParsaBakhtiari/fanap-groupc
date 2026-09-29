@@ -1,0 +1,9 @@
+fastapi==0.115.12
+uvicorn[standard]==0.34.2
+SQLAlchemy==2.0.41
+PyMySQL==1.1.1
+PyJWT==2.10.1
+pydantic-settings==2.9.1
+httpx==0.28.1
+boto3==1.38.23
+prometheus-client==0.22.0

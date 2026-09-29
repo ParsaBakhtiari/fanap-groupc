@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Cloud Shop</title>
+  <style>
+    :root { color-scheme: light; font: 16px/1.5 system-ui, sans-serif; background:#f5f7fb; color:#172033 }
+    body { margin:0; } header, main { max-width:980px; margin:auto; padding:1.2rem }
+    header { display:flex; justify-content:space-between; align-items:center }
+    h1 { margin:0; font-size:1.5rem } .panel, article { background:white; border:1px solid #dce2ee; border-radius:12px; padding:1rem; box-shadow:0 4px 18px #26334d0d }
+    .auth { display:grid; grid-template-columns:1fr 1fr auto; gap:.6rem; margin-bottom:1rem }
+    .products { display:grid; grid-template-columns:repeat(auto-fit,minmax(210px,1fr)); gap:1rem }
+    input, button { font:inherit; border-radius:8px; padding:.65rem; border:1px solid #aeb8ca }
+    button { cursor:pointer; background:#2457d6; color:white; border-color:#2457d6 } button.secondary { background:white; color:#2457d6 }
+    .price { font-weight:700; font-size:1.15rem } #status { min-height:1.5rem; color:#44516a } .cart { margin-top:1rem }
+    @media (max-width:650px) { .auth { grid-template-columns:1fr } }
+  </style>
+</head>
+<body>
+  <header><h1>Cloud Shop</h1><button class="secondary" id="refresh">Refresh catalog</button></header>
+  <main>
+    <section class="panel auth" aria-label="Account">
+      <input id="email" type="email" autocomplete="email" placeholder="Email">
+      <input id="password" type="password" autocomplete="current-password" placeholder="Password (12+ characters)">
+      <div><button id="login">Sign in</button> <button class="secondary" id="register">Register</button></div>
+    </section>
+    <p id="status" role="status"></p>
+    <section><h2>Products</h2><div class="products" id="products"></div></section>
+    <section class="panel cart"><h2>Cart</h2><div id="cart">Sign in to use the cart.</div><button id="checkout">Place order</button></section>
+  </main>
+  <script>
+    const state = { token: sessionStorage.getItem('token'), cart: [] };
+    const status = message => document.querySelector('#status').textContent = message;
+    async function api(path, options={}) {
+      const headers = {'Content-Type':'application/json', ...(options.headers || {})};
+      if (state.token) headers.Authorization = `Bearer ${state.token}`;
+      const response = await fetch(path, {...options, headers});
+      if (!response.ok) { const body = await response.json().catch(()=>({})); throw new Error(body.error?.message || `Request failed (${response.status})`); }
+      return response.status === 204 ? null : response.json();
+    }
+    async function loadProducts() {
+      const products = await api('/api/v1/products');
+      document.querySelector('#products').innerHTML = products.map(p => `<article><h3>${p.name}</h3><p>${p.description}</p><p class="price">${p.price} EUR</p><p>${p.available_quantity} available</p><button data-id="${p.id}">Add to cart</button></article>`).join('');
+      document.querySelectorAll('[data-id]').forEach(button => button.onclick = () => addToCart(button.dataset.id));
+    }
+    async function loadCart() {
+      if (!state.token) return;
+      state.cart = (await api('/api/v1/cart')).items;
+      document.querySelector('#cart').textContent = state.cart.length ? state.cart.map(i => `${i.product_id}: ${i.quantity}`).join(' · ') : 'Your cart is empty.';
+    }
+    async function addToCart(product_id) {
+      if (!state.token) return status('Sign in before adding products.');
+      try { await api('/api/v1/cart', {method:'PUT', body:JSON.stringify({product_id, quantity:1})}); await loadCart(); status('Cart updated.'); } catch (e) { status(e.message); }
+    }
+    async function authenticate(register=false) {
+      try {
+        const body = JSON.stringify({email:document.querySelector('#email').value, password:document.querySelector('#password').value});
+        if (register) await api('/api/v1/auth/register', {method:'POST', body});
+        const token = await api('/api/v1/auth/token', {method:'POST', body});
+        state.token = token.access_token; sessionStorage.setItem('token', state.token); status('Signed in.'); await loadCart();
+      } catch (e) { status(e.message); }
+    }
+    document.querySelector('#login').onclick = () => authenticate(false);
+    document.querySelector('#register').onclick = () => authenticate(true);
+    document.querySelector('#refresh').onclick = () => loadProducts().catch(e => status(e.message));
+    document.querySelector('#checkout').onclick = async () => {
+      if (!state.token || !state.cart.length) return status('Add at least one product first.');
+      const shipping_address = prompt('Shipping address'); if (!shipping_address) return;
+      try {
+        const order = await api('/api/v1/orders', {method:'POST', headers:{'Idempotency-Key':crypto.randomUUID()}, body:JSON.stringify({items:state.cart, shipping_address, currency:'EUR'})});
+        await api('/api/v1/cart', {method:'DELETE'}); await loadCart(); status(`Order ${order.id} confirmed.`);
+      } catch (e) { status(e.message); }
+    };
+    loadProducts().catch(e => status(e.message)); loadCart().catch(e => status(e.message));
+  </script>
+</body>
+</html>

@@ -1,0 +1,30 @@
+{
+  "compilerOptions": {
+    "module": "commonjs",
+    "declaration": true,
+    "removeComments": true,
+    "emitDecoratorMetadata": true,  // This one is crucial
+    "experimentalDecorators": true, // This one is also crucial
+    "allowSyntheticDefaultImports": true,
+    "target": "ES2021",
+    "sourceMap": true,
+    "outDir": "./dist",
+    "baseUrl": "./",
+    "ignoreDeprecations": "6.0",
+    "incremental": true,
+    "skipLibCheck": true,
+    "strictNullChecks": false,
+    "noImplicitAny": false,
+    "strictBindCallApply": false,
+    "forceConsistentCasingInFileNames": false,
+    "noFallthroughCasesInSwitch": false,
+    // "paths": {
+    //   // This path is important. It creates an alias for your src folder
+    //   "@src/*": ["src/*"]
+    // }
+  },
+  "exclude": [
+    "node_modules",
+    "dist"
+  ]
+}
